@@ -14,7 +14,7 @@
 #include<netinet/in.h>
 #include<stdbool.h>
 typedef long double ld;
-int lis_sock,psvo_sock,yes=1,act_sock;//lis_sock: passive socket, responsible for listening to new client
+int lis_sock,psvo_sock,yes=1,act_sock,udp_sock;//lis_sock: passive socket, responsible for listening to new client
 socklen_t cli_addrlen;
 struct sockaddr_in ser_addr,cli_addr;//psvo_sock: passive open socket, responsible for the actual data transfer
 long f_size;//recvsize is in byte;
@@ -34,8 +34,73 @@ static inline void getmtime(){
 static inline ld trPctg(){
 	return (ld)ftell(fp)/(ld)(f_size);
 }
-int main(int argc, char *argv[]){
+static inline void recvInit(){
+	ser_addr.sin_addr.s_addr=htonl(INADDR_ANY);
+	if((lis_sock=socket(AF_INET,SOCK_STREAM,0))==-1){
+		perror("socket()");
+		exit(0);
+	}
+	if(setsockopt(lis_sock, SOL_SOCKET, SO_REUSEADDR,&yes,sizeof(int)) == -1){
+		perror("setsockopt()");
+		exit(0);
+	}
+	if(bind(lis_sock,(struct sockaddr*)&ser_addr,(socklen_t)sizeof(struct sockaddr_in))==-1){
+		perror("bind()");
+		exit(0);
+	}
+	if(listen(lis_sock,BACKLOG)==-1){
+		perror("listen()");
+		exit(0);
+	}
+	printf("W8ing for connection...\n");
+	if((psvo_sock=accept(lis_sock,(struct sockaddr*)&cli_addr,(socklen_t * restrict)&cli_addrlen))==-1){
+		perror("accept()");
+		exit(0);
+	}
+	//recv filename
+	recv(psvo_sock,(void *)buf,BUFLEN,0);
+	if((fp=fopen(buf,"wb"))==NULL){
+		perror("fopen()");
+		exit(0);
+	}
+	//recv f_size
+	BUFCLR
+	recv(psvo_sock,(void *)buf,BUFLEN,0);
+	f_size=atol(buf);
+	BUFCLR
+	return;
+}
+static inline void sendInit(char *a3,char *a5){
+	ser_addr.sin_addr.s_addr=inet_addr(a3);
+	if((act_sock=socket(AF_INET,SOCK_STREAM,0))==-1){
+		perror("socket()");
+		exit(0);
+	}
 	
+	if(connect(act_sock,(struct sockaddr *)&ser_addr,sizeof(struct sockaddr))==-1){
+		perror("connect()");
+		exit(0);
+	}
+	//get filename
+	BUFCLR
+	strcpy(buf,a5);
+	if((fp=fopen(a5,"rb"))==NULL){
+		perror("fopen()");
+		exit(0);
+	}
+	//send filename		
+	send(act_sock,(void *)buf,BUFLEN,0);
+	//get f_size
+	fseek(fp, 0L, SEEK_END);
+	f_size=ftell(fp);
+	rewind(fp);
+	BUFCLR
+	sprintf(buf,"%ld",f_size);
+	//send f_size
+	send(act_sock,(void *)buf,BUFLEN,0);
+	return;
+}
+int main(int argc, char *argv[]){	
 	bzero(&ser_addr,sizeof(struct sockaddr_in));
 	bzero(&cli_addr,sizeof(struct sockaddr_in));
 	BUFCLR
@@ -45,39 +110,7 @@ int main(int argc, char *argv[]){
 	setenv("TZ", "GMT-8", 0);
 	
 	if(strcmp("tcp",argv[1])==0 && strcmp("recv",argv[2])==0){
-		ser_addr.sin_addr.s_addr=htonl(INADDR_ANY);
-		if((lis_sock=socket(AF_INET,SOCK_STREAM,0))==-1){
-			perror("socket()");
-			return 0;
-		}
-		if(setsockopt(lis_sock, SOL_SOCKET, SO_REUSEADDR,&yes,sizeof(int)) == -1){
-			perror("setsockopt()");
-			return 0;
-		}
-		if(bind(lis_sock,(struct sockaddr*)&ser_addr,(socklen_t)sizeof(struct sockaddr_in))==-1){
-			perror("bind()");
-			return 0;
-		}
-		if(listen(lis_sock,BACKLOG)==-1){
-			perror("listen()");
-			return 0;
-		}
-		printf("W8ing for connection...\n");
-		if((psvo_sock=accept(lis_sock,(struct sockaddr*)&cli_addr,(socklen_t * restrict)&cli_addrlen))==-1){
-			perror("accept()");
-			return 0;
-		}
-		//recv filename
-		recv(psvo_sock,(void *)buf,BUFLEN,0);
-		if((fp=fopen(buf,"wb"))==NULL){
-			perror("fopen()");
-			return 0;
-		}
-		//recv f_size
-		BUFCLR
-		recv(psvo_sock,(void *)buf,BUFLEN,0);
-		f_size=atol(buf);
-		BUFCLR
+		recvInit();
 		ftime(&start);
 		while((rcv_size=recv(psvo_sock,(void *)buf,BUFLEN,0)) > 0){
 			if(rcv_size<0)perror("recv()");
@@ -110,34 +143,7 @@ int main(int argc, char *argv[]){
 	}
 
 	else if(strcmp("tcp",argv[1])==0 && strcmp("send",argv[2])==0){
-		ser_addr.sin_addr.s_addr=inet_addr(argv[3]);
-		
-		if((act_sock=socket(AF_INET,SOCK_STREAM,0))==-1){
-			perror("socket()");
-			return 0;
-		}
-		
-		if(connect(act_sock,(struct sockaddr *)&ser_addr,sizeof(struct sockaddr))==-1){
-			perror("connect()");
-			return 0;
-		}
-		//get filename
-		BUFCLR
-		strcpy(buf,argv[5]);
-		if((fp=fopen(argv[5],"rb"))==NULL){
-			perror("fopen()");
-			return 0;
-		}
-		//send filename		
-		send(act_sock,(void *)buf,BUFLEN,0);
-		//get f_size
-		fseek(fp, 0L, SEEK_END);
-		f_size=ftell(fp);
-		rewind(fp);
-		BUFCLR
-		sprintf(buf,"%ld",f_size);
-		//send f_size
-		send(act_sock,(void *)buf,BUFLEN,0);
+		sendInit(argv[3],argv[5]);
 		while(!feof(fp)){
 			BUFCLR
 			rd_size=fread((void *)buf,1,BUFLEN,fp);			
@@ -147,11 +153,18 @@ int main(int argc, char *argv[]){
 		close(act_sock);
 		fclose(fp);
 		printf("All info transferred successfully\n");
-		return 0;
 	}
 
-	else if(strcmp("tcp",argv[1])==0 && strcmp("recv",argv[2])==0){
-		return 0;
+	else if(strcmp("udp",argv[1])==0 && strcmp("recv",argv[2])==0){
+		ser_addr.sin_addr.s_addr=htonl(INADDR_ANY);
+		if((udp_sock=socket(AF_INET,SOCK_DGRAM,0))==-1){
+			perror("socket()");
+			return 0;
+		}
+		if(bind(udp_sock,(struct sockaddr*)&ser_addr,(socklen_t)sizeof(struct sockaddr_in))==-1){
+			perror("bind()");
+			return 0;
+		}
 	}
 	else if(strcmp("tcp",argv[1])==0 && strcmp("recv",argv[2])==0){
 		return 0;
